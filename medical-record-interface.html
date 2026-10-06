@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>MedicalRecord — Interaction MetaMask</title>
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+<style>
+  body { font-family: sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  h2 { margin-top: 0; font-size: 16px; }
+  input { width: 100%; padding: 6px; margin: 4px 0 10px; box-sizing: border-box; }
+  button { padding: 8px 14px; cursor: pointer; }
+  .result { background: #f4f4f4; padding: 8px; border-radius: 4px; font-family: monospace; word-break: break-all; white-space: pre-wrap; }
+  #status { font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>MedicalRecord — Interface de test</h1>
+
+<section>
+  <h2>1. Connexion MetaMask</h2>
+  <button id="connectBtn">Connecter MetaMask</button>
+  <p>Compte : <span id="account">non connecté</span></p>
+  <p>Réseau : <span id="network">-</span></p>
+</section>
+
+<section>
+  <h2>2. Connexion au contrat</h2>
+  <label>Adresse du contrat déployé</label>
+  <input id="contractAddress" placeholder="0x..." />
+  <button id="loadContractBtn">Charger le contrat</button>
+  <p id="status"></p>
+</section>
+
+<section>
+  <h2>3. Enregistrer un hash</h2>
+  <label>Identifiant patient</label>
+  <input id="registerPatientId" placeholder="PAT-001" />
+  <label>Contenu du dossier (le hash sera calculé automatiquement)</label>
+  <input id="registerContent" placeholder="Texte du dossier médical" />
+  <button id="registerBtn">Enregistrer sur la blockchain</button>
+  <div class="result" id="registerResult"></div>
+</section>
+
+<section>
+  <h2>4. Lire le dernier hash enregistré</h2>
+  <label>Identifiant patient</label>
+  <input id="readPatientId" placeholder="PAT-001" />
+  <button id="readBtn">Lire le dernier hash</button>
+  <div class="result" id="readResult"></div>
+</section>
+
+<section>
+  <h2>5. Vérifier l'intégrité d'un dossier</h2>
+  <label>Identifiant patient</label>
+  <input id="verifyPatientId" placeholder="PAT-001" />
+  <label>Contenu actuel du dossier (à comparer)</label>
+  <input id="verifyContent" placeholder="Texte du dossier médical" />
+  <button id="verifyBtn">Vérifier l'intégrité</button>
+  <div class="result" id="verifyResult"></div>
+</section>
+
+<script>
+  const ABI = [
+    "function registerRecord(string patientId, bytes32 recordHash) external",
+    "function getLatestRecord(string patientId) external view returns (bytes32 recordHash, uint256 timestamp)",
+    "function verifyIntegrity(string patientId, bytes32 hashToCheck) external view returns (bool)",
+    "function getVersionCount(string patientId) external view returns (uint256)",
+    "event RecordRegistered(string indexed patientId, bytes32 recordHash, uint256 timestamp, uint256 version)"
+  ];
+
+  let provider, signer, contract;
+
+  const el = (id) => document.getElementById(id);
+
+  // Recharge automatiquement la page si le réseau ou le compte change dans
+  // MetaMask, pour éviter les incohérences (provider ethers.js périmé).
+  if (window.ethereum) {
+    window.ethereum.on("chainChanged", () => window.location.reload());
+    window.ethereum.on("accountsChanged", () => window.location.reload());
+  }
+
+  el("connectBtn").addEventListener("click", async () => {
+    if (!window.ethereum) {
+      alert("MetaMask n'est pas détecté dans ce navigateur.");
+      return;
+    }
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = await provider.getSigner();
+
+    const address = await signer.getAddress();
+    const network = await provider.getNetwork();
+
+    el("account").textContent = address;
+    el("network").textContent = `chainId ${network.chainId}`;
+  });
+
+  el("loadContractBtn").addEventListener("click", () => {
+    if (!signer) {
+      el("status").textContent = "Connecte d'abord MetaMask.";
+      return;
+    }
+    const address = el("contractAddress").value.trim();
+    if (!ethers.isAddress(address)) {
+      el("status").textContent = "Adresse de contrat invalide.";
+      return;
+    }
+    contract = new ethers.Contract(address, ABI, signer);
+    el("status").textContent = "Contrat chargé : " + address;
+  });
+
+  el("registerBtn").addEventListener("click", async () => {
+    const resultEl = el("registerResult");
+    if (!contract) { resultEl.textContent = "Charge d'abord le contrat."; return; }
+
+    try {
+      const patientId = el("registerPatientId").value.trim();
+      const content = el("registerContent").value;
+      const hash = ethers.keccak256(ethers.toUtf8Bytes(content));
+
+      resultEl.textContent = "Hash calculé : " + hash + "\nEnvoi de la transaction...";
+
+      const tx = await contract.registerRecord(patientId, hash);
+      const receipt = await tx.wait();
+
+      resultEl.textContent =
+        "Hash calculé : " + hash +
+        "\nTransaction confirmée : " + receipt.hash;
+    } catch (err) {
+      resultEl.textContent = "Erreur : " + (err.reason || err.message);
+    }
+  });
+
+  el("readBtn").addEventListener("click", async () => {
+    const resultEl = el("readResult");
+    if (!contract) { resultEl.textContent = "Charge d'abord le contrat."; return; }
+
+    try {
+      const patientId = el("readPatientId").value.trim();
+      const [hash, timestamp] = await contract.getLatestRecord(patientId);
+      const date = new Date(Number(timestamp) * 1000).toLocaleString();
+
+      resultEl.textContent = "Hash : " + hash + "\nDate : " + date;
+    } catch (err) {
+      resultEl.textContent = "Erreur : " + (err.reason || err.message);
+    }
+  });
+
+  el("verifyBtn").addEventListener("click", async () => {
+    const resultEl = el("verifyResult");
+    if (!contract) { resultEl.textContent = "Charge d'abord le contrat."; return; }
+
+    try {
+      const patientId = el("verifyPatientId").value.trim();
+      const content = el("verifyContent").value;
+      const hash = ethers.keccak256(ethers.toUtf8Bytes(content));
+
+      const isValid = await contract.verifyIntegrity(patientId, hash);
+
+      resultEl.textContent =
+        "Hash recalculé : " + hash +
+        "\nRésultat : " + (isValid ? "✅ Dossier intègre" : "❌ Dossier modifié / hash différent");
+    } catch (err) {
+      resultEl.textContent = "Erreur : " + (err.reason || err.message);
+    }
+  });
+</script>
+
+</body>
+</html>
